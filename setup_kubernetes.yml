@@ -1,0 +1,83 @@
+- name: Setup Kubernetes Cluster
+  hosts: kubernetes_nodes
+  become: yes
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker-ce
+        state: present
+        update_cache: yes
+
+    - name: Add Kubernetes GPG key
+      apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Add Kubernetes repository
+      apt_repository:
+        repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+        state: present
+
+    - name: Install Kubernetes components
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Disable swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
+
+    - name: Initialize Kubernetes master
+      shell: kubeadm init --pod-network-cidr=192.168.0.0/16
+      when: inventory_hostname == groups['kubernetes_nodes'][0]
+
+    - name: Create .kube directory
+      file:
+        path: /home/{{ ansible_user }}/.kube
+        state: directory
+        mode: '0755'
+      when: inventory_hostname == groups['kubernetes_nodes'][0]
+
+    - name: Copy admin.conf to user's kube config
+      command: cp /etc/kubernetes/admin.conf /home/{{ ansible_user }}/.kube/config
+      when: inventory_hostname == groups['kubernetes_nodes'][0]
+
+    - name: Set ownership of the kube config file
+      file:
+        path: /home/{{ ansible_user }}/.kube/config
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0644'
+      when: inventory_hostname == groups['kubernetes_nodes'][0]
+
+    - name: Apply Calico network plugin
+      command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+      when: inventory_hostname == groups['kubernetes_nodes'][0]
+
+    - name: Join worker nodes to the cluster
+      shell: kubeadm join <master-node-ip>:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash>
+      when: inventory_hostname != groups['kubernetes_nodes'][0]
