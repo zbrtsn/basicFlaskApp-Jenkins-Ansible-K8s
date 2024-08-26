@@ -1,0 +1,260 @@
+---
+- name: Install kubectl, Kubernetes, and kind on Ubuntu machines
+  hosts: ubuntu
+  become: yes
+  
+  vars:
+    gitlab_repo_url: 'https://mtgit.mediatriple.net/zubeyir.tosun/basic-to-do-flask2.git'
+    dest_path: '/home/ubuntu/project/'
+    git_branch: 'latest' 
+
+  tasks:
+    - name: update apt package
+      apt:
+        update_cache: yes
+
+    - name: install necessary things
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+        state: present
+
+    
+
+    #- name: Download Kubernetes GPG key
+      #become: yes
+      #get_url:
+        #url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        #dest: /tmp/kubernetes-archive-keyring.gpg
+
+    #- name: Add Kubernetes GPG key
+      #become: yes
+      #command: gpg --dearmor -o /etc/apt/keyrings/kubernetes-archive-keyring.gpg /tmp/kubernetes-archive-keyring.gpg
+
+    #- name: Confirm previous
+      #debug:
+        #msg: "Is that ok? {{ isok }}"
+
+    #- name: Add the Kubernetes repository to your system's sources.list
+      #command: echo "deb [signed-by=/etc/apt/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+      #register: isoka
+
+    #- name: update apt package again
+      #apt:
+        #update_cache: yes
+
+    #- name: Install Kubectl using the apt package manager
+      #apt:
+        #name: kubectl
+        #state: present
+
+
+    #- name: install kubectl
+      #apt:
+        #name: kubectl
+        #state: present
+        
+        
+    - name: Update APT package index
+      apt:
+        update_cache: yes
+
+    - name: Install snapd
+      apt:
+        name: snapd
+        state: present
+
+    - name: Ensure snapd service is started and enabled
+      systemd:
+        name: snapd
+        enabled: yes
+        state: started
+
+    - name: Install kubectl using snap
+      snap:
+        name: kubectl
+        classic: yes
+
+    - name: Verify kubectl installation
+      command: kubectl version --client
+      register: kubectl_version
+      changed_when: False
+
+    - name: Show kubectl version
+      debug:
+        msg: "kubectl version: {{ kubectl_version.stdout }}"
+
+    - name: install docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: add current user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: enable and start docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: install kind
+      get_url:
+        url: https://kind.sigs.k8s.io/dl/v0.17.0/kind-linux-amd64
+        dest: /usr/local/bin/kind
+        mode: '0755'
+
+    - name: verify kind installation
+      command: kind --version
+      register: result
+      failed_when: "'kind version' not in result.stdout"
+      changed_when: False
+
+    - name: Create kubernetes cluster using kind
+      shell: kind create cluster --name conclusion
+      args:
+        creates: /root/.kube/config
+
+    - name: Create /project directory
+      file:
+        path: /home/ubuntu/project
+        state: directory
+        mode: '0755'
+      register: dir_creation
+
+    - name: Notify directory creation status
+      debug:
+        msg: "Directory was created or already exists."
+      when: dir_creation.changed
+
+    - name: Ensure destination directory exists
+      file:
+        path: "{{ dest_path }}"
+        state: directory
+
+    - name: Clone the GitLab repository
+      git:
+        repo: "{{ gitlab_repo_url }}"
+        dest: "{{ dest_path }}"
+        version: "{{ git_branch }}"
+        force: yes
+      register: git_clone_result
+
+    - name: Display git status
+      debug:
+        msg: "Git repository status: {{ git_clone_result }}"
+
+
+#    - name: copy the github files to remote machines
+#      copy:
+#        src: / # kaynak dosya yeri
+#        dest: /project/  # dosyanın atılacak yeri
+#        mode: '0755'
+
+    - name: Check if deployment file exists
+      stat:
+        path: "/home/ubuntu/project/kind-deployment.yaml"
+      register: deployment_file
+
+#    - name: Fail if deployment file does not exist
+#      fail:
+#        msg: "Deployment file does not exist at /home/ubuntu/project/kind-deployment.yaml"
+#      when: not deployment_file.stat.exists
+      
+    - name: List files and directories
+      command: ls -l /home/ubuntu/project/
+      register: directory_contents
+
+    - name: Display directory contents
+      debug:
+        msg: "{{ directory_contents.stdout }}"
+
+    
+    
+    
+    # Check if deployment exists
+    - name: Check if deployment exists
+      command: kubectl get deployments flask-deployment --ignore-not-found
+      register: deployment_check
+      failed_when: false
+
+    # Delete existing deployment if present
+    - name: Delete existing deployment
+      command: kubectl delete -f /home/ubuntu/project/basic-to-do-flask2/kind-deployment.yaml
+      when: deployment_check.stdout != ""
+      register: delete_deployment_result
+      failed_when: false
+      ignore_errors: true
+
+    # Apply deployment if not present or after deletion
+    - name: Apply deployment
+      command: kubectl apply -f /home/ubuntu/project/basic-to-do-flask2/kind-deployment.yaml
+      register: apply_deployment_result
+      failed_when: false
+
+    # Check if service exists
+    - name: Check if service exists
+      command: kubectl get services flask-service --ignore-not-found
+      register: service_check
+      failed_when: false
+
+    # Delete existing service if present
+    - name: Delete existing service
+      command: kubectl delete -f /home/ubuntu/project/basic-to-do-flask2/kind-service.yaml
+      when: service_check.stdout != ""
+      register: delete_service_result
+      failed_when: false
+      ignore_errors: true
+
+    # Apply service if not present or after deletion
+    - name: Apply service
+      command: kubectl apply -f /home/ubuntu/project/basic-to-do-flask2/kind-service.yaml
+      register: apply_service_result
+      failed_when: false
+
+    # Report deployment actions
+    - name: Report deployment status
+      debug:
+        msg: "Deployment was applied."
+      when: apply_deployment_result is defined and apply_deployment_result.rc == 0
+
+    # Report service actions
+    - name: Report service status
+      debug:
+        msg: "Service was applied."
+      when: apply_service_result is defined and apply_service_result.rc == 0
+
+
+
+    
+    
+   
+
+
+
+
+#    - name: delete deployment file from kubernetes cluster
+#      command: kubectl delete -f /home/ubuntu/project/kind-deployment.yaml
+#      register: delete_deploy_result
+#      changed_when: "'deleted' not in delete_deploy_result.stdout"
+
+#    - name: apply deployment file to kubernetes cluster
+#      command: kubectl apply -f /home/ubuntu/project/kind-deployment.yaml
+#      register: deploy_result
+#      changed_when: "'configured' in deploy_result.stdout"
+
+#    - name: delete service file from kubernetes cluster
+#      command: kubectl delete -f /home/ubuntu/project/kind-service.yaml
+#      register: delete_service_result
+#      changed_when: "'deleted' not in delete_service_result.stdout"
+
+#    - name: apply service file to kubernetes cluster
+#      command: kubectl apply -f /home/ubuntu/project/kind-service.yaml
+#      register: service_result
+#      changed_when: "configured in service_result.stdout"
